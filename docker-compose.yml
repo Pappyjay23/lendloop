@@ -1,0 +1,79 @@
+name: lendloop
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: n8n
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lendloop-local}
+      POSTGRES_DB: n8n
+    volumes:
+      - n8n_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5678:5678"
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD:-lendloop-local}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-change-me-32-chars-minimum-key}
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678/}
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-UTC}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      # Shared secrets. Never hard-coded in workflow JSON.
+      LENDLOOP_OUTBOUND_SECRET: ${LENDLOOP_OUTBOUND_SECRET}
+      LENDLOOP_INBOUND_SECRET: ${LENDLOOP_INBOUND_SECRET}
+      # Convex HTTP endpoints (the .convex.site origin, not .convex.cloud).
+      LENDLOOP_CONVEX_SITE_URL: ${LENDLOOP_CONVEX_SITE_URL}
+      LENDLOOP_MAIL_FROM: ${LENDLOOP_MAIL_FROM:-LendLoop <loans@lendloop.local>}
+      LENDLOOP_ALERT_EMAIL: ${LENDLOOP_ALERT_EMAIL:-ops@lendloop.local}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+      - ./n8n/credentials:/credentials:ro
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
+  # Optional: expose your local n8n to Convex Cloud without a hosted instance.
+  # Requires a free Cloudflare account. The URL changes on every restart, so
+  # copy the printed https://*.trycloudflare.com address into Convex:
+  #   npx convex env set N8N_REQUEST_WEBHOOK_URL https://<id>.trycloudflare.com/webhook/lendloop/request-event
+  # tunnel:
+  #   image: cloudflare/cloudflared:latest
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate --url http://n8n:5678
+  #   depends_on:
+  #     - n8n
+
+volumes:
+  n8n_data:
+  n8n_postgres:

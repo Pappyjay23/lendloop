@@ -1,0 +1,137 @@
+{
+  "id": "LendLoopErrors01",
+  "name": "LendLoop — Automation errors",
+  "nodes": [
+    {
+      "parameters": {
+        "width": 380,
+        "height": 240,
+        "color": 4,
+        "content": "## Automation error handler\n\nSet this workflow as the **Error Workflow** on both LendLoop workflows (Settings → Error Workflow). Failed runs are written to Convex and raise an in-app notification for admins, so nothing fails silently."
+      },
+      "id": "43ffd3bb-d326-4cea-8d21-d1041c6336cc",
+      "name": "Read me",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        -240
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "b8efd230-6748-4677-a9be-7ad274139c0f",
+      "name": "Error trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst workflowName = (data.workflow && data.workflow.name) || 'LendLoop workflow';\nconst executionId = String((data.execution && data.execution.id) || Date.now());\nconst message =\n  (data.execution && data.execution.error && data.execution.error.message) ||\n  (data.error && data.error.message) ||\n  'Unknown workflow error';\nconst requestId =\n  (data.execution && data.execution.error && data.execution.error.requestId) || undefined;\n\nreturn [{\n  json: {\n    workflow: workflowName,\n    executionId: executionId,\n    message: message,\n    requestId: requestId\n  }\n}];"
+      },
+      "id": "480e23e3-5526-47d8-944d-bde037e83f04",
+      "name": "Build error payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "function sortValue(value) {\n  if (Array.isArray(value)) {\n    return value.map(function (entry) { return entry === undefined ? null : sortValue(entry); });\n  }\n  if (value && typeof value === 'object') {\n    const out = {};\n    Object.keys(value).sort().forEach(function (key) {\n      if (value[key] !== undefined) out[key] = sortValue(value[key]);\n    });\n    return out;\n  }\n  return value;\n}\n\nconst crypto = require('crypto');\nconst error = $input.first().json;\nconst payload = {\n  workflow: error.workflow,\n  executionId: error.executionId,\n  message: error.message,\n  requestId: error.requestId\n};\nconst canonical = JSON.stringify(sortValue(payload));\nconst timestamp = Date.now();\nconst signature = crypto\n  .createHmac('sha256', $env.LENDLOOP_INBOUND_SECRET)\n  .update(String(timestamp) + '.' + canonical)\n  .digest('hex');\n\nreturn [{\n  json: {\n    bodyString: canonical,\n    timestamp: timestamp,\n    signature: signature,\n    url: $env.LENDLOOP_CONVEX_SITE_URL + '/automation/workflow-error'\n  }\n}];"
+      },
+      "id": "f0b6fafc-f813-45ab-b819-48a2e476295c",
+      "name": "Sign error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "x-lendloop-signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.bodyString }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "32d6b566-5fd3-4848-bdbf-0accd4adfef9",
+      "name": "Record workflow error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "Error trigger": {
+      "main": [
+        [
+          {
+            "node": "Build error payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build error payload": {
+      "main": [
+        [
+          {
+            "node": "Sign error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign error": {
+      "main": [
+        [
+          {
+            "node": "Record workflow error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC"
+  },
+  "pinData": {},
+  "active": false
+}

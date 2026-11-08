@@ -1,0 +1,303 @@
+{
+  "id": "LendLoopRequest1",
+  "name": "LendLoop — Request notifications",
+  "nodes": [
+    {
+      "parameters": {
+        "width": 380,
+        "height": 260,
+        "color": 4,
+        "content": "## Request notifications\n\nConvex signs the payload with **LENDLOOP_OUTBOUND_SECRET**; this workflow verifies it before doing anything.\n\nRequired n8n environment variables:\n- LENDLOOP_OUTBOUND_SECRET\n- LENDLOOP_INBOUND_SECRET\n- LENDLOOP_CONVEX_SITE_URL\n- LENDLOOP_MAIL_FROM\n\nSelect an SMTP credential on **Send email** (Mailpit locally, Resend in production)."
+      },
+      "id": "177aebc2-268c-488c-b3cf-f6f7f27d537a",
+      "name": "Read me",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -460,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop/request-event",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "05661137-2338-42ab-92ce-64e6fc683ec6",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "bf5c1d69-c2f7-4469-b550-eb0b04e8f8bc"
+    },
+    {
+      "parameters": {
+        "jsCode": "function sortValue(value) {\n  if (Array.isArray(value)) {\n    return value.map(function (entry) { return entry === undefined ? null : sortValue(entry); });\n  }\n  if (value && typeof value === 'object') {\n    const out = {};\n    Object.keys(value).sort().forEach(function (key) {\n      if (value[key] !== undefined) out[key] = sortValue(value[key]);\n    });\n    return out;\n  }\n  return value;\n}\n\nconst crypto = require('crypto');\nconst item = $input.first().json;\nconst body = item.body || {};\nconst headers = item.headers || {};\nconst timestamp = headers['x-lendloop-timestamp'];\nconst signature = String(headers['x-lendloop-signature'] || '').toLowerCase();\nconst canonical = JSON.stringify(sortValue(body));\nconst expected = crypto\n  .createHmac('sha256', $env.LENDLOOP_OUTBOUND_SECRET)\n  .update(String(timestamp) + '.' + canonical)\n  .digest('hex');\nconst fresh = Boolean(timestamp) && Math.abs(Date.now() - Number(timestamp)) < 300000;\nlet valid = false;\ntry {\n  valid = fresh && expected.length === signature.length &&\n    crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));\n} catch (error) {\n  valid = false;\n}\n\nif (!valid) {\n  return [{ json: { valid: false, status: 401, error: 'invalid_signature' } }];\n}\n\nreturn [{\n  json: {\n    valid: true,\n    status: 202,\n    body: body,\n    eventId: headers['x-lendloop-event-id'] || body.eventId || null\n  }\n}];"
+      },
+      "id": "fd013259-f94d-4565-a2ad-5af413876478",
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "is-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c02ef689-d70f-4458-bf90-6f3d40f8ff05",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "accepted",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "5cbb7e26-533e-41ea-9d8b-87ee1ff11cd2",
+      "name": "Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('Verify signature').item.json.body;\nconst eventId = $('Verify signature').item.json.eventId;\nconst kind = body.eventKind || 'request.created';\n\nconst subjects = {\n  'request.created': 'New borrow request',\n  'request.approved': 'Request approved',\n  'request.declined': 'Request declined',\n  'request.cancelled': 'Request cancelled',\n  'request.returned': 'Tool returned'\n};\n\nconst messages = {\n  'request.created': body.counterpartFirstName + ' would like to borrow your ' + body.toolName + ' (' + body.dateRange + '). Open LendLoop to approve or decline.',\n  'request.approved': body.counterpartFirstName + ' approved your loan of ' + body.toolName + ' (' + body.dateRange + ').',\n  'request.declined': body.counterpartFirstName + ' declined your request for ' + body.toolName + '.',\n  'request.cancelled': body.counterpartFirstName + ' cancelled their request for ' + body.toolName + '.',\n  'request.returned': body.counterpartFirstName + ' marked ' + body.toolName + ' as returned. Thank you.'\n};\n\nconst subject = (subjects[kind] || 'LendLoop update') + ': ' + body.toolName;\nconst message = messages[kind] || ('There is an update on ' + body.toolName + '.');\nconst html = '<div style=\"font-family:Arial,Helvetica,sans-serif;color:#1a1712;line-height:1.6\">' +\n  '<h2 style=\"margin:0 0 12px\">' + subject + '</h2>' +\n  '<p style=\"margin:0 0 16px\">Hi ' + body.recipient.firstName + ',</p>' +\n  '<p style=\"margin:0 0 16px\">' + message + '</p>' +\n  '<p style=\"margin:0 0 24px\"><a href=\"' + body.actionUrl + '\" style=\"background:#1a1712;color:#fffcf6;padding:10px 18px;border-radius:8px;text-decoration:none\">Open LendLoop</a></p>' +\n  '<p style=\"margin:0;color:#8b8272;font-size:12px\">LendLoop &middot; neighbourhood tool library</p>' +\n  '</div>';\n\nreturn [{\n  json: {\n    to: body.recipient.email,\n    subject: subject,\n    html: html,\n    eventId: eventId,\n    kind: kind\n  }\n}];"
+      },
+      "id": "0d37ca26-a0b4-49a8-80bc-f8b4dcc450e5",
+      "name": "Compose message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.LENDLOOP_MAIL_FROM }}",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "784eb3b7-97d2-4666-bedc-738ef887e728",
+      "name": "Send email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1100,
+        -100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "smtp": {
+          "id": "LendLoopMailpit1",
+          "name": "LendLoop SMTP (Mailpit)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function sortValue(value) {\n  if (Array.isArray(value)) {\n    return value.map(function (entry) { return entry === undefined ? null : sortValue(entry); });\n  }\n  if (value && typeof value === 'object') {\n    const out = {};\n    Object.keys(value).sort().forEach(function (key) {\n      if (value[key] !== undefined) out[key] = sortValue(value[key]);\n    });\n    return out;\n  }\n  return value;\n}\n\nconst crypto = require('crypto');\nconst composed = $('Compose message').item.json;\nconst email = $input.first().json;\nconst payload = {\n  eventId: composed.eventId,\n  outcome: 'delivered',\n  providerMessageId: email.messageId || undefined\n};\nconst canonical = JSON.stringify(sortValue(payload));\nconst timestamp = Date.now();\nconst signature = crypto\n  .createHmac('sha256', $env.LENDLOOP_INBOUND_SECRET)\n  .update(String(timestamp) + '.' + canonical)\n  .digest('hex');\n\nreturn [{\n  json: {\n    bodyString: canonical,\n    timestamp: timestamp,\n    signature: signature,\n    url: $env.LENDLOOP_CONVEX_SITE_URL + '/automation/notification-result'\n  }\n}];"
+      },
+      "id": "8cf65ba3-a1cb-403b-a3f6-ff1c923ebb7b",
+      "name": "Sign write-back",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "x-lendloop-signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.bodyString }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "d601d593-3653-4612-961c-00669f5868e5",
+      "name": "Confirm delivery",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        -100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "unauthorized",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "3beb15fa-eb08-4acd-b7ab-2a4fde2b7124",
+      "name": "Unauthorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        120
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unauthorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Accepted": {
+      "main": [
+        [
+          {
+            "node": "Compose message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose message": {
+      "main": [
+        [
+          {
+            "node": "Send email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send email": {
+      "main": [
+        [
+          {
+            "node": "Sign write-back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign write-back": {
+      "main": [
+        [
+          {
+            "node": "Confirm delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC",
+    "errorWorkflow": "LendLoopErrors01"
+  },
+  "pinData": {},
+  "active": false
+}

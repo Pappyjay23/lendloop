@@ -1,0 +1,18 @@
+// Optional local agent tooling. Not required to run LendLoop.
+// After editing, restart OpenCode and run `opencode mcp auth clerk`.
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "convex": {
+      "type": "local",
+      "command": ["cmd", "/c", "npx", "-y", "convex@latest", "mcp", "start"],
+      "cwd": ".",
+      "enabled": true
+    },
+    "clerk": {
+      "type": "remote",
+      "url": "https://mcp.clerk.com/mcp",
+      "enabled": true
+    }
+  }
+}

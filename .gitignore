@@ -23,6 +23,9 @@
 # misc
 .DS_Store
 *.pem
+.dev-server.log
+*.log
+DEMO.local.md
 
 # debug
 npm-debug.log*
@@ -32,6 +35,13 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+!.env.n8n.example
+.env.n8n
+.env*.local
+
+# convex local state (generated functions are committed for CI typechecking)
+/.convex/
 
 # vercel
 .vercel
